@@ -1,0 +1,406 @@
+---
+title: "Lab 3 - Logistic Regression and Healthcare Data"
+author: "Jerry Zikun Chen"
+date: '2019-10-29'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Part 1 - Kidney Stone Treatement Data
+### a)
+First, we recreate the dataset from the paper. Among the patients that have kidney stones with mean diameter less than 2 centimeters, there are in total 87 patients received open surgery (open_surg), and 270 patients received Percutaneous nephrolithotomy ESWL (percut) treatment. There are 263 open surgeries and 80 percutaneous treatments performed on patients that have kidney stones with mean diameter larger than or equal to 2 centimeters. Successes are encoded as 1's and failures are encoded as 0's.
+
+```{r import, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(broom)
+library(plyr)
+library(dplyr)
+library(plotROC)
+options(digits=5)
+```
+```{r create dataset}
+# Create dataset from the paper
+group <- c(rep('<2', 87), rep('<2', 270), rep('>=2', 263), rep('>=2', 80))
+proc <- c(rep('open_surg', 87),  rep('percut', 270), rep('open_surg', 263), rep('percut', 80))
+success <- as.integer(c(rep(1, 81), rep(0, 6),
+                        rep(1, 234), rep(0, 36),
+                        rep(1, 192), rep(0, 71),
+                        rep(1, 55), rep(0, 25)))
+
+kidney_df <- as_tibble(data.frame(group, proc, success))
+head(kidney_df)
+```
+
+### Logistic Regression without Seperation of Kidney Stone Size
+```{r contingency}
+table(kidney_df$proc, kidney_df$success)
+```
+
+By the contingency table above, we can see that open sugery group have a success rate of $273/(273+77) = 0.78$, lower than the percut group which has a success rate of $289/(289+61) = 0.826$. The odds ratio of sucess in percut vs. open surgery group is $(289/61)/(273/77) = 1.337$, which means percut operations are $33.7\%$ more likely to be successful on kidney stone patients than open sugeries based on the dataset.
+
+```{r logistic regression}
+lr_full <- glm(success ~ proc, data = kidney_df, family = binomial)
+tidy(lr_full)
+```
+```{r cl}
+exp(cbind("odds ratio" = coef(lr_full), confint(lr_full)))
+```
+
+We fit the logistic regression model ($\pi$ is probability of success and categorical variable $x$ is the procedure type): $$log(\frac{\pi}{1-\pi}) = \beta_0 + \beta_1x$$
+As wee can see from the above summary, the p-value for $\beta_1$ is greater than 0.05. We are not statistically confident to conclude that $\beta_1$ has the value of 0.29, meaning that we cannot say that if we change the procedure from an open surgery to a percut, then we will have in $exp(0.29) = 1.337$ change in odds of success. Note that $exp(0.29)$ matches the odds ratio from the contingency table. The confidence interval of log odds includes the estimate $1$ for $\beta_1$, meaning that there is no difference between the odds of success of the two operation.
+
+### b) 
+Next, we compare results in two seperate patient groups with kidney stones with diameter greater than or equal to 2 centimeters and smaller than 2 centimeters respectively. We produce contigency tables and fit logistic regression models to these two groups.
+
+### Logistic Regression for >=2 Group
+```{r contingency >=2}
+kidney_large <- filter(kidney_df, group == ">=2")
+table(kidney_large$proc, kidney_large$success)
+```
+
+By the contingency table of $>=2$ group, we can see that open sugery group have a success rate of $192/(192+71) = 0.73$, higher than the percut group, which has a success rate of $55/(55+25) = 0.6875$. The odds ratio of success in percut vs. open surgery group is $(55/25)/(192/71) = 0.8135$. Therefore, according to the table alone, percut operations are $19\%$ less likely to be successful on patients with larger kidney stones.
+
+```{r lr >=2}
+lr_large <- glm(success ~ proc, data = kidney_large, family = binomial)
+tidy(lr_large)
+```
+```{r cl >=2}
+exp(cbind("odds ratio" = coef(lr_large), confint(lr_large)))
+```
+The p-values for $\beta_1$ is not statistically significant so we cannot say that for patients with larger kidney stones, if we change the procedure from an open surgery to a percut, then we will have significant changes in odds of success. This inconclusive result is also confirmed by the confidence interval where $1$ is included in the estimate of the slope.
+
+### Logistic Regression for <2 Group
+```{r contingency <2}
+kidney_small <- filter(kidney_df, group == "<2")
+table(kidney_small$proc, kidney_small$success)
+```
+
+By the contingency table of $>=2$ group, we can see that open sugeries have a success rate of $81/(81+6) = 0.93$, higher than the percut group which has a success rate of $243/(243+36) = 0.87$. The odds ratio of success in percut vs. open surgery group is $(234/36)/(81/6) = 0.48$. Therefore, it suggests that compared to open sugeries, percut operations 
+are $48\%$ less likely to be successful on patients with smaller kidney stones.
+
+```{r lr <2}
+lr_small <- glm(success ~ proc, data = kidney_small, family = binomial)
+tidy(lr_small)
+```
+```{r cl <2}
+exp(cbind("odds ratio" = coef(lr_small), confint(lr_small)))
+```
+Similar to the other group, the p-value for the slope is again statistically insignificant and we cannot be confident about these estimates. Confidence interval for the slope includes an estimate of $1$.
+
+### Confusion Matrix and ROC curve
+Next, we analyze confusion matrices and ROC curves for the two groups.
+```{r roc large}
+pred_probs <- lr_large %>% predict(type = "response")
+pred_class  <- ifelse(pred_probs >= 0.70, "positive", "failure")
+confusion <- table(kidney_large$success, pred_class)
+
+tp <- confusion[2,2]
+fp <- confusion[1,2]
+fn <- confusion[2,1]
+tn <- confusion[1,1]
+recall <- tp / (fn + tp)
+precision <- tp /(tp + fp)
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+f_score <- (2*precision*recall)/(recall+precision)
+confusion
+sprintf("accuracy: %.4f", accuracy)
+sprintf("F-score: %.4f", f_score)
+
+tibble(pred = pred_probs, obs = kidney_large$success) %>%
+  ggplot(aes(d = obs, m = pred)) + geom_roc() + style_roc(theme = theme_gray)
+```
+
+```{r roc small}
+pred_probs <- lr_small %>% predict(type = "response")
+pred_class  <- ifelse(pred_probs >= 0.9, "positive", "negative")
+confusion <- table(kidney_small$success, pred_class)
+
+tp <- confusion[2,2]
+fp <- confusion[1,2]
+fn <- confusion[2,1]
+tn <- confusion[1,1]
+recall <- tp / (fn + tp)
+precision <- tp /(tp + fp)
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+f_score <- (2*precision*recall)/(recall+precision)
+confusion
+sprintf("accuracy: %.4f", accuracy)
+sprintf("F-score: %.4f", f_score)
+
+tibble(pred = pred_probs, obs = kidney_small$success) %>%
+  ggplot(aes(d = obs, m = pred)) + geom_roc() + style_roc(theme = theme_gray)
+```
+
+We can see that neither the model for the smaller nor the larger group achieved good accuracy when the best thresholds were selected. The ROC plots are only slight better then random guesses.
+
+### Probit Regression
+We further investigate the dataset with probit link functions below:
+
+```{r probit}
+# Probit Model for >=2 group
+probit_large <- glm(success ~ proc, family = binomial(link = "probit"), data = kidney_large)
+tidy(probit_large)
+
+pred_probs <- probit_large %>% predict(type = "response")
+pred_class  <- ifelse(pred_probs >= 0.7, "succ", "fail")
+table(pred_class, kidney_large$success)
+tibble(pred = pred_probs, obs = kidney_large$success) %>%
+  ggplot(aes(d = obs, m = pred)) + geom_roc() + style_roc(theme = theme_gray)
+
+# Probit Model for <2 group
+probit_small <- glm(success ~ proc, family = binomial(link = "probit"), data = kidney_small)
+tidy(probit_small)
+
+pred_probs <- probit_small %>% predict(type = "response")
+pred_class  <- ifelse(pred_probs >= 0.9, "succ", "fail")
+table(pred_class, kidney_small$success)
+tibble(pred = pred_probs, obs = kidney_small$success) %>%
+  ggplot(aes(d = obs, m = pred)) + geom_roc() + style_roc(theme = theme_gray)
+
+# Full Probit Model for all patients
+probit_full <- glm(success ~ proc + group, family = binomial(link = "probit"), data = kidney_df)
+tidy(probit_full)
+
+pred_probs <- probit_full %>% predict(type = "response")
+pred_class  <- ifelse(pred_probs >= 0.7, "succ", "fail")
+confusion <- table(pred_class, kidney_df$success)
+
+tp <- confusion[2,2]
+fp <- confusion[1,2]
+fn <- confusion[2,1]
+tn <- confusion[1,1]
+recall <- tp / (fn + tp)
+precision <- tp /(tp + fp)
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+f_score <- (2*precision*recall)/(recall+precision)
+confusion
+sprintf("accuracy: %.4f", accuracy)
+sprintf("F-score: %.4f", f_score)
+
+tibble(pred = pred_probs, obs = kidney_df$success) %>%
+  ggplot(aes(d = obs, m = pred)) + geom_roc() + style_roc(theme = theme_gray)
+```
+
+From the probit regression models, we can see that the slopes became statistically significant. Amount the smaller group, the probit model shows that percut operations can raise the probability of success by $\Phi(-0.124) = 0.45$. In the second model for $<2$ group, there is a $\Phi(-0.373) = 0.35$ increase in the probability of success for the larger group. Despite the lack of statistical significance in the coefficient for the operation type, the full probit model achieves good prediction results with accuracy of $0.76$ and a F-score of $0.86$.
+
+### c) Conclusion
+From the logistic regression analysis, we can conclude that it is neccesary to treat patients with kidney stones of larger and smaller size differently based on the disproportionate operation assignment. They were not randomly assigned to patients. Most of patients with larger kidney stones were treated with open surgeries and vice versa. For the $<2$ group, the result is not clear since we did not achieve a statistically significant estimate of the log odds ratio. Even though the open surgeries has a higher rate of success empirically, most patients in this group are treated with percut so there can be more variabilities in the percut results. This assignment bias is the opposite for the $>=2$ group. So there is no meaningful conclusions to be drawn about which operation is better for neither groups.  Prediction results for both groups are poor according to confusion matrices and ROC curves. We do not have a clear-cut conclusion for neither group based on logistic regression models.
+
+On the other hand, the probit regression models provides a better story. We estimate that percut operation is better than open surgeries. This is based on the statistically significant estimates that we have achieved in both groups. Specifically, we expect a $0.45$ and $0.35$ increases in probabilities of operation success for the larger and smaller groups respectively. Furthermore, the full probit model consist of both the procedure type and kidney stone size achieve as input achieves better prediction results based on the confusion matrices and its ROC curve. However, it is worth noting that when patients are seperated into two groups, the logistic regression predictions are not as good. When looked together, the coefficient of operation type becomes less significant.
+
+## Part 2 - Risk of Cardiovascular Disease among Osteoarthritis Patients (Statistical Society of Canada)
+
+### a)
+To answer questions 1,2, and 4 from the website:
+https://ssc.ca/en/case-study/case-study-2-risk-cardiovascular-disease-among-osteoarthritis-patients
+We first load and clean the datasets. Datasets are loaded from Rdata files in the data folder.
+
+```{r load datasets}
+load("data/cchs11.Rdata")
+load("data/cchs21.Rdata")
+load("data/cchs31.Rdata")
+```
+
+```{r filter and clean, message=FALSE, warning=FALSE}
+# select 12 out of 23 columns
+col_names_11 <- c("CCCA_121", "CCCA_05A", "DHHAGAGE", "DHHA_SEX", "SDCAGRAC", "EDUADR04", "INCAGHH", "HWTAGBMI",
+                  "TWDA_5", "SMKADSTY", "ALCADTYP", "CCCA_071", "CCCA_101", "PACADPAI", "GEOAGPRV", "SDCAGRES", "DHHAGMS")
+col_names_21 <- c("CCCC_121", "CCCC_05A", "DHHCGAGE", "DHHC_SEX", "SDCCGRAC", "EDUCDR04", "INCCGHH", "HWTCGBMI",
+                  "HCUC_1AA", "SMKCDSTY", "ALCCDTYP", "CCCC_071", "CCCC_101", "PACCDPAI", "GEOCGPRV", "SDCCGRES", "DHHCGMS")
+col_names_31 <- c("CCCE_121", "CCCE_05A", "DHHEGAGE", "DHHE_SEX", "SDCEGCGT", "EDUEDR04", "INCEGHH", "HWTEGBMI",
+                  "HCUE_1AA", "SMKEDSTY", "ALCEDTYP", "CCCE_071", "CCCE_101", "PACEDPAI", "GEOEGPRV", "SDCEGRES", "DHHEGMS")
+col_names_new <- c("heart", "osart", "age", "sex", "ethnicity", "education", "income", "BMI",
+                   "doctor", "smoker", "drinker", "highBP", "diabetes", "PAI", "province", "immigration", "marital")
+
+osart11 <- cchs11 %>% filter(CCCA_05A == "OSTEOARTHRITIS" | CCCA_05A == "NOT APPLICABLE") %>% select(col_names_11)
+osart21 <- cchs21 %>% filter(CCCC_05A == "OSTEOARTHRITIS" | CCCC_05A == "NOT APPLICABLE") %>% select(col_names_21)
+osart31 <- cchs31 %>% filter(CCCE_05A == "OSTEOARTHRITIS" | CCCE_05A == "NOT APPLICABLE") %>% select(col_names_31)
+
+names(osart11) <- col_names_new
+names(osart21) <- col_names_new
+names(osart31) <- col_names_new
+
+osart_df <- do.call("rbind", list(osart11, osart21, osart31))
+rm("osart11", "osart21", "osart31", "cchs11", "cchs21", "cchs31")
+
+osart_df$osart <- revalue(osart_df$osart, c("OSTEOARTHRITIS"=1, "NOT APPLICABLE"=0))
+osart_df$heart <- revalue(osart_df$heart, c("YES"=1, "NO"=0))
+osart_df$doctor <- revalue(osart_df$doctor, c("YES"=1, "NO"=0))
+osart_df$highBP <- revalue(osart_df$highBP, c("YES"=1, "NO"=0))
+osart_df$diabetes <- revalue(osart_df$diabetes, c("YES"=1, "NO"=0))
+osart_df$income <- revalue(osart_df$income, c("NO INCOME"="NO OR <$15,000", "LESS THAN 15,000"="NO OR <$15,000"))
+osart_df$immigration <- revalue(osart_df$immigration, c("NOT APPLICABLE"="not immigrant", "0 TO 9 YEARS"="recent immigrant", "10 YEARS OR MORE"="more than 10 years", "10 OR MORE YEARS" = "more than 10 years"))
+osart_df$education <- revalue(osart_df$education, c("OTHER POST-SEC."="POST-SEC.", "POST-SEC. GRAD."="POST-SEC."))
+osart_df$BMI <- cut(as.numeric(levels(osart_df$BMI))[osart_df$BMI], c(0, 18.5, 25, Inf), 
+                     labels=c('underweight', 'healthy', 'overweight'), right=FALSE)
+osart_df$smoker <- mapvalues(osart_df$smoker, from = c("DAILY", "OCCASIONAL", "ALWAYS OCCASION.", "FORMER DAILY", "FORMER OCCASION.", "NEVER SMOKED"), to = c("REGULAR", "OCCASIONAL", "OCCASIONAL", "FORMER", "FORMER", "NEVER"))
+osart_df$marital <- revalue(osart_df$marital, c("SINGLE/NEVER MAR" = "SINGLE"))
+
+osart_df <- replace(osart_df, osart_df=="NOT APPLICABLE", NA)
+osart_df <- replace(osart_df, osart_df=="NOT STATED", NA)
+osart_df <- replace(osart_df, osart_df=="DON'T KNOW", NA)
+osart_df <- replace(osart_df, osart_df=="REFUSAL", NA)
+osart_df <- droplevels(osart_df)
+osart_df <- na.omit(osart_df)
+
+# summary of each column in the dataset
+summary(osart_df)
+```
+
+### Q1
+Within Canadian adults (20-64 years of age), is having osteoarthritis associated with the developing heart disease? For the purpose of this case study, assume that, from the literature, we know that the following variables are risk factors for the outcome and confounders in the above relationship: age, sex, ethnicity, education, household income, body mass index (BMI), access to a regular medical doctor, smoking habit, alcohol drinking habit, high-blood pressure, and diabetes. Also, assume that physical activity is suspected to be an intermediate factor between osteoarthritis and heart disease.
+
+```{r q1 preprocess}
+adult_range <- c("20 TO 24 YEARS", "25 TO 29 YEARS",  "30 TO 34 YEARS", "35 TO 39 YEARS", 
+  "40 TO 44 YEARS", "45 TO 49 YEARS", "50 TO 54 YEARS", "55 TO 59 YEARS", "60 TO 64 YEARS")
+
+# take the average age for each age group
+adult_numeric <- c(22, 27, 32, 37, 42, 47, 52, 57, 62)
+osart_df <- osart_df[osart_df$age %in% adult_range, ]
+osart_df$age <- as.numeric(mapvalues(osart_df$age, from = adult_range, to = adult_numeric))
+```
+
+```{r q1 model}
+# change base references
+osart_df <- within(osart_df, heart <- relevel(heart, ref = "0"))
+osart_df <- within(osart_df, osart <- relevel(osart, ref = "0"))
+osart_df <- within(osart_df, BMI <- relevel(BMI, ref = "healthy"))
+osart_df <- within(osart_df, smoker <- relevel(smoker, ref = "NEVER"))
+
+lrmod <- glm(heart ~ osart + age + sex + ethnicity + education + income + BMI + doctor + smoker + drinker + highBP + diabetes + PAI, data = osart_df, family = binomial)
+
+summary(lrmod)
+```
+
+From the logistic regression model, we can conclude that exposure to osteoarthritis patients are more likely to have cardiovascular diseases as well. Accounting for possible risk factors and confounders as mentioned above, osteoarthritis is a statistically significant contributor to the risk of heart diseases. Specifically, the model estimates that the odds of having cardiovascular disease will increase by a factor of $exp(0.399) = 1.49$ when the patient has osteoarthritis. Note that an adjusted model is presented for prediction purposes in the last section, where the insignificant variable PAI is removed.
+
+### Q2  
+Does the relationship between osteoarthritis and heart disease vary:
+(a) between participants living in the northern parts of Canada versus those living in the southern parts?
+```{r q2 preprocess}
+osart_df$province <- mapvalues(osart_df$province, 
+          from = c("NEWFOUNDLAND", "PEI", "NOVA SCOTIA","NEW BRUNSWICK", "QU\xc9BEC", 
+                   "ONTARIO", "MANITOBA","SASKATCHEWAN", "ALBERTA", "BRITISH COLUMBIA", 
+                   "YUKON/NWT/NUNAVT", "NFLD & LAB.","QUEBEC", "YUKON/NWT/NUNA."), 
+          to = c(rep("south", 10), "north", "south", "south", "north"))
+```
+
+```{r q2 province}
+lr_prov <- glm(heart ~ osart + province + osart:province, data = osart_df, family = binomial)
+tidy(lr_prov)
+```
+```{r interaction province}
+interaction.plot(x.factor = osart_df$osart,
+                 trace.factor = osart_df$province,
+                 response = as.numeric(levels(osart_df$heart))[osart_df$heart])
+summary(aov(as.numeric(levels(osart_df$heart))[osart_df$heart] ~ osart*province, data = osart_df))
+```
+
+The p-values for the location coefficient and the interaction coefficient are not significant. This means that where the patient is from does not affect the relationship between osteoarthritis and heart diseases. The plot also shows a parallel relationships between the lines with no interaction effect.
+
+(b) between men and women?
+```{r q2 sex}
+osart_df <- within(osart_df, sex <- relevel(sex, ref = "FEMALE"))
+lr_sex <- glm(heart ~ osart + sex + osart:sex, data = osart_df, family = binomial)
+tidy(lr_sex)
+```
+
+The logistic regression we consider here is:
+$$log\frac{\pi}{1-\pi} = \beta_0 + \beta_1 * orart + \beta_2*sex + \beta_3 *orart*sex$$
+The p-values for all coefficients are statistically significant. This means that the association between heart diseases and osteoarthritis depends on the gender of the patient. Specifically, $exp(\beta_0)/(1+exp(\beta_0)) = 0.018$ is the probability of having heart diseases when the patient is a female without osteoarthritis. $exp(\beta_1) = exp(1.46) = 4.31$ is the odds ratio of heart disease comparing osteoarthritis and non-osteoarthritis among female patients. $exp(\beta_2) = exp(0.603) = 1.83$ is the odds ratio of heart disease comparing males with females among non-osteoarthritis patients. $exp(\beta_3) = exp(-0.26) = 0.77$ is the difference between the log-odds ratio comparing osteoarthritis vs. non-osteoarthritis in males and log-odds ratio comparing osteoarthritis vs. non-osteoarthritis in females. i.e.:
+
+$$log\frac{odd_{o,m}}{odd_{no,m}} - log\frac{odd_{o,f}}{odd_{no,f}} = -0.26 = log\frac{odd_{o,m} * odd_{no,f}}{odd_{no,m}*odd_{o,f}}$$
+Therefore,
+$$ exp(-0.26) = 0.77 = \frac{odd_{o,m}}{odd_{o,f}}/\frac{odd_{no,m}}{odd_{no,f}} = \frac{odd_{o,m}}{odd_{no,m}}/\frac{odd_{o,f}}{odd_{no,f}}$$
+
+```{r interaction sex}
+interaction.plot(x.factor = osart_df$osart,
+                 trace.factor = osart_df$sex,
+                 response = as.numeric(levels(osart_df$heart))[osart_df$heart])
+summary(aov(as.numeric(levels(osart_df$heart))[osart_df$heart] ~ osart*sex, data = osart_df))
+```
+
+The results seem to suggest that male patients will have a lower chance of having heart diseases if they also have osteoarthritis. However, upon examining the parallel interaction plot, there is an absense of synergy between gender and osteoarthritis. It shows that statistical significance can occur based on the sheer size of the dataset. Nonetheless, the logistic regression model shows that male are more prone to having heart diseases.
+
+(c) by marital status?
+```{r q2 marital}
+lr_marital <- glm(heart ~ osart + marital + osart:marital, data = osart_df, family = binomial)
+tidy(lr_marital)
+```
+
+```{r interaction marital}
+interaction.plot(x.factor = (osart_df$osart),
+                 trace.factor = osart_df$marital,
+                 response = as.numeric(levels(osart_df$heart))[osart_df$heart])
+```
+Given the same osteoarthritis status, the model suggests that compared to a married person, people with common-law status or single status have less chance of developing heart diseases, whereas people who are divided with their spouses have higher risks of heart diseases. The is only one interaction term that is significant. The interation plot suggests that we should not take this interaction seriously.
+
+(d) by recency of immigration?
+```{r q2 immigration}
+lr_immigration <- glm(heart ~ osart + immigration + osart:immigration, data = osart_df, family = binomial)
+tidy(lr_immigration)
+```
+
+```{r interaction immigration}
+interaction.plot(x.factor = (osart_df$osart),
+                 trace.factor = osart_df$immigration,
+                 response = as.numeric(levels(osart_df$heart))[osart_df$heart])
+```
+
+The immigration model shows that controlling for osteoarthritis exposure, older immigrants and non-immigrants both have a higher risk for heart diseases (by factors of 2.77 and 2.54 respectively) than recent immigrants. It is also statistically significant that among osteoarthritis patients, older immigrants are more likely to have heart diseases than recent immigrants. These results might be plausible because immigrants who have been to the country longer are probably older as well, thus more likely to catch diseases in general. On the other hand, non-immigrants might not have the same level of medical access as those who have immigration status. Again, the plot seems to suggest that intreaction terms are unnecessary since lines are relatively parallel.
+
+### Q4 
+With the information provided in the PUMF, what would be your interpretation of the analysis results? What are the limitations of this study? What additional information would be helpful in reaching a more meaningful conclusion?
+
+### Interpretations:
+The analysis above clearly shows that osteoarthritis patients are more prone to heart diseases. On top of that, gender, age and marital status played significant role in the link between
+osteoarthritis and cardiovascular diseases. It is important to control for these variables if we do further experiments on the association between osteoarthritis and heart diseases. 
+
+### Limitations:
+The limitation of this study is that there are many possible combination of the interactions between potential contributors of heart diseases and confounders. To uncover every possible combination is somewhat infeasible with a limited amount of time. Some of the variables can be correlated as well, for instance, between marital status and age or immigration status and age. Another important issue is that we are only looking for correlation, not causation. A simple reversal of the osteoarthritis indicator and heart disease indicator in the model also yields statistically significant result. The above evidences cannot be used to conclude that osteoarthritis is a cause for cardiovasucular diseases. Lastly, we have only applied logistic regression to the dataset. There are other methods such as random forest or neural networks that might produce better results and provide new knowledge for us.
+
+### Additional Information Needed:
+Less missing data can certainly be helpful to the analysis. It will also be helpful to control for other variables like age and gender in order to isolate the association between osteoarthritis and cardiovasucular diseases, although variabilities in physical and mental conditions among patients are hard to manage. Furthermore, the datasets are from 15 years ago, if we have access to the same patients now and see what have changed for them, it can provide insights for us as to what happens over time. For instance, given new data, it might be possible that heart diseases can be prevented if osteoarthritis is cured over time.
+
+### b) 
+Evaluate the predictive accuarcy of the model used to calculate the adjusted measure of association between osteoarthitis and heart disease. Do you recommend using this model to prdedict heart disease for Canadians?
+
+Based on the above analysis, we remove the insignificant variables and purpose the following adjusted model below where all vairables are statistically significant and no interaction terms are present:
+
+```{r adjusted model}
+lr_adjusted <- glm(heart ~ osart + age + sex + ethnicity + education + income + BMI + doctor + smoker + drinker + highBP + diabetes, data = osart_df, family = binomial)
+
+summary(lr_adjusted)
+```
+
+```{r prediction}
+pred_probs <- lr_adjusted %>% predict(type = "response")
+# 0.111 achieves the highest f_score
+pred_class  <- ifelse(pred_probs >= 0.1, "positive", "negative")
+confusion <- table(osart_df$heart, pred_class)
+tp <- confusion[2,2]
+fp <- confusion[1,2]
+fn <- confusion[2,1]
+tn <- confusion[1,1]
+recall <- tp / (fn + tp)
+precision <- tp /(tp + fp)
+accuracy <- (tp + tn) / (tp + tn + fp + fn)
+f_score <- (2*precision*recall)/(recall+precision)
+confusion
+sprintf("accuracy: %.4f", accuracy)
+sprintf("F-score: %.4f", f_score)
+sprintf("false negative probability: %.4f", fn/(tp + tn + fp + fn))
+
+tibble(pred = pred_probs, obs = as.numeric(levels(osart_df$heart))[osart_df$heart]) %>%
+  ggplot(aes(d = obs, m = pred)) + geom_roc() + style_roc(theme = theme_gray)
+
+```
+
+In the adjusted logistic regression model, we exclude the physical activity index (PAI) compared to the full model because PAI was not statistically significant. The adjusted model has a decent-looking concave ROC curve. Even though the model can achieve a good accuracy overall, it seems to have overfitted the data. This is because when we increase the threshold towards 1, we see that the model is essentially guessing towards every patient not having heart diseases. This is because over 95% of the patients in the dataset do not have a heart problem, and just by guessing that the patient is free of cardiovascular diseases all the time can achieve a high accuracy. Therefore, we should look into more detailed metrics like the false negative rate. We care about false negative probability because it is more important to reduce the number of people who are predicted to have no heart problem but in fact do (false negatives) than to wrongly predict someone healthy to have heart diseases (false positives). When the threshold is set to $0.1$, the model achieves an accuracy of $93\%$ and a F-score of $0.24$ while maintaining a low false negative probability around $1.9\%$. I recommend using this logistic regression model with the threshold of $0.1$ to predict heart diseases in similar patients. However, we need to be cautious about the false negative probability and keep in mind the bias present in the dataset.
+
+
+
+
+
+
