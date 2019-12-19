@@ -1,0 +1,324 @@
+---
+title: 'Project #1 Report'
+author: "Andrew Muth, Jerry Zikun Chen"
+date: "25/11/2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r, echo = FALSE, warnings = FALSE, message=FALSE}
+library("ggplot2")
+library("ggrepel")
+library("tidyr")
+library("latex2exp")
+library("dplyr")
+library("gridExtra")
+library("knitr")
+library("lmerTest")
+
+source("utils.r")
+```
+
+# Summary
+
+As part of their daily routine the Canadian Women's Rugby team answers a daily survey concerning their overall wellness. This survey consists primarily of ordinal and binary response data concerning their mental and physical well being as well as their sleeping and nutritional habits. The women also complete a survey after each training session. As part of a broader change in high performance sport, Rugby Canada is interested in whether this data can be used to improve player performance.
+
+We consider the two datasets separately as there was inadequate data regarding the training load that athletes carry into competition to conduct a meaningful analysis. Instead we offer what we believe is an improvement over current practices in measuring session load. Our measure of session load is a pseudo heart rate-based measure which can be implemented immediately using only the data currently being collected. It is also immediately extendable if we were to gain access to the athletes' heart rate data.
+
+The wellness survey is conducted both in and out of competition and thus there was enough data to study the effects of athlete wellness on in game performance. We the extend this analysis to offer interpretable measures of athlete well-being which can be used on a daily business.
+
+# Measuring Training Load
+
+After each training session the duration of the session is recorded, and the athlete is asked to give a rate of perceived exertion of the training session on an ordinal scale from 0-9. The session load is then calculated as the RPE multiplied by the duration of the session. We consider this to be a crude measure of session load for two reasons. The first is that RPE is both a subjective and ordinal score and as such may differ across athletes and the calculation of session load implicitly assumes that RPE increases linearly with the underlying exertion of the athlete. Our second object is that we are unconvinced that athletes either do or are able to accurately account for the length of the training session when reporting RPE. Consider the following hypothetical: training session 1 is a five-minute run and training session 2 is a 90 min run. If the athlete is told to run both workouts as hard, they can they are likely to rate both sessions as a 9 RPE. However, if we were able to measure the athlete’s heart rate for both sessions, we would see that the athlete's average heart rate for the five minute run was higher than for the 90 minute run and as such a more objective measure of exertion (here heart rate) is able to distinguish between the two sessions whereas RPE is not. We believe the graph below shows that our concerns are justified.
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=4}
+rpe <- read.csv("../data/rpe.csv")
+rpe <- rpe[complete.cases(rpe$RPE),]
+rpe$RPE <- as.factor(rpe$RPE)
+
+ggplot(rpe, aes(x=RPE, y=Duration)) + 
+  geom_boxplot() +
+  coord_flip() + 
+  annotate(geom="text", x = 2, y = 225, label = paste0("Corr: ", round(cor(as.numeric(rpe$RPE), rpe$Duration), 2))) + 
+  ggtitle("Rate of Percieved Exertion Versus Workout Duration")
+```
+
+If athletes were able to accurately account for the duration of the training session in reporting RPE we would see the mean duration of the workout decrease as RPE increased. Additionally, while RPE is ordinal we would expect to see a negative correlation. 
+
+There already exists a broad literature on different methods for measuring workout intensity. A good overview of some of the more popular methods can be found in “Rationale and resources for teaching mathematical modeling of athletic training and performance” by David C. Clarke and Philip F. Skiba. We would also like to extend a thank you to Ming for sharing this resource with us.
+
+While we did not have access to it, we know that Rugby Canada collects heart rate data for the athletes under consideration. We therefore, sought to create a pseudo heart rate-based measure of workout intensity. To do this we looked to combine summated heart rate zone scores with Eric Banister’s training impulse (TRIMP). That is, based on the duration of the training session and the RPE we looked to use summated heart rate zone scores to estimate the athlete’s mean heart rate for the session which we then use along with the session duration to get an estimate of the TRIMP of the session. 
+
+For those unfamiliar Eric Banister’s training impulse is given by, 
+
+$$TRIMP = t \times \kappa \times FHHR $$
+$$FHHR = \frac{HR_{average} - HR_{rest}}{HR_{max} - HR_{rest}} $$
+where $t$ is the session duration in minutes, $FHHR$ is the fraction of heart rate reserve and $\kappa = 0.64e^{1.92 \times FHHR}$ for men and $\kappa = 0.86e^{1.67 \times FHHR}$ for women. 
+
+There are many variants of the summated heart rate zone scores. However, we chose to adopt the one used by Rowing Canada Aviron. Both because of our familiarity with it and because in addition to heart rates Rowing Canada Aviron’s system also offers training session durations. It should also be noted that the physiology between rugby players and rowers is similar.
+
+```{r, echo = FALSE, warning = FALSE}
+knitr::include_graphics("../data/images/Training Systems.png")
+```
+
+Later we will need heart rate intervals for categories 3, 2, and 1. We chose to partition the interval (175, 200] as (175, 185], (185, 190], and (190, 200]. This choice was subjective and based on past experience working with this system. For those unfamiliar with heart rate data or heart rate training zones we offer the following examples of it.
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=3}
+
+fnames <- c(648690997, 702606553, 711144272, 728513863, 4209674786)
+
+
+hr2 <-  read.csv(paste0("../data/heart rates/", fnames[2], ".csv"))
+hr3 <-  read.csv(paste0("../data/heart rates/", fnames[3], ".csv"))
+hr4 <-  read.csv(paste0("../data/heart rates/", fnames[4], ".csv"))
+
+
+par(mfrow=c(3, 1))
+plotHeartRate(hr2$heart_rate.bpm., "3x30min Ergometer")
+plotHeartRate(hr3$heart_rate.bpm., "Intervals Ergometer")
+plotHeartRate(hr4$heart_rate.bpm., "50km Bike")
+
+
+```
+
+Using the heart rate training zones and session durations used by Rowing Canada Aviron we came up with the following classification chart for the possible training categories of the each recorded workout based on RPE and duration.
+
+```{r, echo = FALSE, warning = FALSE}
+knitr::include_graphics("../data/images/workout classification.png")
+```
+
+We then classified the session as the intersection of the possible training categories for both the RPE and duration of the sessions. The average heart rate of the session was then estimated as the average of the median heart rate for each training category, and the load of the session was calculated according to TRIMP.
+
+
+Training load has a cumulative effect on the body and hence physical performance as well. Thus to meaningfully study the effects of training load on athletic performance it is necessary to have several days (or even a week) of reported session load leading up to a game or physical test Unfortunately, the RPE data leading up to the tournaments was not complete enough to conduct any meaningful analysis as to how our measure of session load compares to the measure currently used by Rugby Canada. However, as extensive work has been done on constructing heart rate-based measures of session load we believe that our measure of session load is likely an improvement on the measure currently used. We suggest that our method be adopted alongside the current measure of session load so that a meaningful analysis of the two measures may conducted once there is sufficient data. 
+
+
+# Measuring Wellness
+
+The daily wellness survey that athletes consists of ordinal and binary data covering mental and physical health, nutrition, and sleep habits. Prior to any analysis it was decided to “normalize” ordinal responses for each athlete by treating the data as if it were interval data and then by dividing the response for each athlete by that athlete’s mean response for that question. This allows for more general comparisons of response data across athletes. 
+
+In constructing our measures of wellness, we wanted the resulting measure to be a function solely of the daily wellness survey so that it could be incorporated into daily training decisions. We also wanted the resulting measure to be easily interpretable by the training staff so that it may realistically be implemented.
+
+```{r, echo = FALSE, warning = FALSE}
+## construct data
+#load in wellness data
+wellness <- read.csv("../data/wellness_adj.csv")
+wellness$Date <- as.Date(wellness$Date)
+wellness <- wellness[order(wellness$Date), ]
+
+#normalize ordinal variables as if they were numeric
+ord_vars <- c("Fatigue", "Soreness", "Desire", "Irritability", "SleepQuality", "Nutrition")
+
+for(player in unique(wellness$PlayerID)){
+  for(var in ord_vars){
+    baseline <- round(mean(wellness[wellness$PlayerID == player, var]), 2) #mean value of ordinal variable
+    wellness[wellness$PlayerID == player, var] <- wellness[wellness$PlayerID == player, var] / baseline
+  }
+}
+
+# load in actual performance data
+performance <- read.csv("../data/performance.csv")
+performance$Date <- as.Date(performance$Date)
+performance <- performance[order(performance$Date), ]
+
+q <- 0.02
+performance$Impulse_idx <- performance$AccelImpulse > quantile(performance$AccelImpulse)
+performance$Load_idx <- performance$AccelLoad > quantile(performance$AccelLoad)
+performance$Speed_idx <- performance$Speed > quantile(performance$Speed)
+
+#load in mixed models
+fit_impulse <- readRDS("../data/fit_impulse.rds")
+fit_speed <- readRDS("../data/fit_speed.rds")
+fit_load <- readRDS("../data/fit_load.rds")
+
+#construct dataframes
+impulse_wellness <- data.frame(matrix(ncol=length(unique(wellness$PlayerID)) + 1, nrow=length(unique(wellness$Date))))
+colnames(impulse_wellness) <- c("Date", paste0("Player", as.character(sort(unique(wellness$PlayerID)))))
+impulse_wellness$Date <- sort(unique(wellness$Date))
+
+speed_wellness <- data.frame(matrix(ncol=length(unique(wellness$PlayerID)) + 1, nrow=length(unique(wellness$Date))))
+colnames(speed_wellness) <- c("Date", paste0("Player", as.character(sort(unique(wellness$PlayerID)))))
+speed_wellness$Date <- sort(unique(wellness$Date))
+
+load_wellness <- data.frame(matrix(ncol=length(unique(wellness$PlayerID)) + 1, nrow=length(unique(wellness$Date))))
+colnames(load_wellness) <- c("Date", paste0("Player", as.character(sort(unique(wellness$PlayerID)))))
+load_wellness$Date <- sort(unique(wellness$Date))
+
+
+for(d in unique(wellness$Date)){
+  
+  dat <- wellness[wellness$Date == d,]
+  
+  for(id in unique(dat$PlayerID)){
+    impulse_wellness[impulse_wellness$Date == d, id+1] <- as.numeric(wellness_metric(dat, fit_impulse, id))
+    speed_wellness[speed_wellness$Date == d, id+1] <- as.numeric(wellness_metric(dat, fit_speed, id))
+    load_wellness[load_wellness$Date == d, id+1] <- as.numeric(wellness_metric(dat, fit_load, id))
+  }
+}
+
+```
+
+Women’s Rugby Canada has their athletes complete a physical battery of tests on a regular basis. This battery consists of a 40-yard dash as well as several other tests to measure the athlete’s explosiveness. In investigating the impact of an athlete’s wellness on their ability to perform we aimed to create metrics from the GPS data which could serve as proxies for this regular testing. To this end we chose to look at the impact of an athlete’s wellness on their maximum observed acceleration load, acceleration impulse, and average speed over five seconds in each game (as a stand in for a 40-yard dash). 
+
+To avoid the case where an athlete only briefly entered the game and was not very active, we only consider cases which exceed the second quantile for each metric under consideration. The need to omit some of the game data is made apparent by the graph below. 
+
+```{r, echo = FALSE, warning = FALSE, fig.width=10, fig.height=5}
+#density plots
+gg1 <- ggplot(performance, aes(x=AccelImpulse)) + 
+          geom_density(color="darkblue", fill="lightblue") + 
+          geom_vline(xintercept=quantile(performance$AccelImpulse, q), colour="red") + 
+          ggtitle("Impulse Density") + 
+          xlab("Impulse")
+
+gg2 <- ggplot(performance, aes(x=AccelLoad)) + 
+          geom_density(color="darkblue", fill="lightblue") + 
+          geom_vline(xintercept=quantile(performance$AccelLoad, q), colour="red") + 
+          ggtitle("Load Density")+ 
+          xlab("Load")
+
+gg3 <- ggplot(performance, aes(x=Speed)) + 
+          geom_density(color="darkblue", fill="lightblue") + 
+          geom_vline(xintercept=quantile(performance$Speed, q), colour="red") + 
+          ggtitle("Speed Density")+ 
+          xlab("Speed")
+
+grid.arrange(gg1, gg2, gg3, nrow=3)
+```
+
+To estimate the effect of the various wellness variables on the three-performance metrics we fit a random intercepts model to account for the variation among players. It should be noted however, that the data is of a more complex hierarchical structure in that observations at the individual level occur within games which in turn occur within a tournament. Unfortunately, fitting such a model was not possible due to limitations with the data. One potential workaround to this problem would be to include variables for the number of games played on a given day or during a tournament. We elected not to include such variables as the resulting model would not be able to be used to offer measures of wellness outside of competition. The resulting wellness scores are then just the athlete's predicted performance on these tests based on their responses to the morning wellness survey.
+
+We also chose not to fit the model with an intercept. In omitting an intercept from the model, the random effects for each player may be thought of that player’s “baseline” score, rather than how each player varies around a constant mean (it also increases the size of the random effects). This increases model interpretability among the training staff. 
+
+Before going over the resulting measures of wellness we look at the random and fixed effects of the 40-yard dash model. Note that p-values for mixed effects models do not make sense in the classical sense. The p-values presented below are obtained via Satterthwaite's method and implementation is done through the "lmerTest" package.
+
+```{r, echo = FALSE, warning = FALSE}
+fix_effs <- summary(fit_speed)$coefficients
+
+
+knitr::kable(
+  round(fix_effs, 2), caption = "Fixed Effects for Speed Test"
+)
+```
+
+As we can see most of the variables affect speed in the way that one would expect. For example, nutrition and soreness work to increase and decreases speed respectively. Others such as fatigue seem to effect performance opposite to what one would expect, however fatigue does have a large standard error relative to its point estimate. Indeed, it seems as though the model can likely be further reduced. We opted not to reduce any of the mixed effect models on grounds that that should be done with someone with domain expertise to avoid removing a variable which appears insignificant, but for which there is a plausible causal relationship.
+
+```{r, echo = FALSE, warning = FALSE}
+ran_effs <- ranef(fit_speed)[[1]]
+rownames(ran_effs) <- c("Player1", "Player2", "Player3", "Player4", "Player5", "Player6", "Player7", "Player8", "Player9", "Player10", "Player11", "Player12", 
+                        "Player13", "Player14", "Player15", "Player16", "Player17")
+colnames(ran_effs) <- "Player Effect"
+ran_effs$`Std. Error` <- 0.11 #taken from summary
+
+knitr::kable(
+  round(ran_effs, 2), caption = "Random Player Effects for Speed Test"
+)
+```
+
+The random effects for the players may be thought of as each player's "baseline" although it should be noted that because the ordinal data was standardized to have mean one for each player instead of mean zero these effects are not how fast each player would run 40 yards absent any fixed effects. To check the validity of this approach the athlete's coach should be consulted to see if faster (slower) players do indeed have higher (lower) random effects.
+
+
+We now present the predicted wellness scores as well as a comparison between predicted and observed wellness for select athletes.
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=6}
+## Actual and Predicted 5 Second Average Speed
+players <- c("Player1", "Player16")
+
+speed_long <- gather(speed_wellness, Player, Wellness, players)
+
+ggplot(speed_long, aes(x=Date, y=Wellness, colour=Player)) + 
+  geom_line(size=0.75) + 
+  ggtitle(("Predicted 5 Second Average Speed of Select Players")) + 
+  ylab(TeX("Speed ($m/s$)")) + 
+  xlab("Date")
+```
+
+We see that player 1 is predicted to be faster than player 16. The predicted speed of both players looks like a white noise process with a constant mean which would be consistent with a constant daily training load. The model does however occasionally predict very slow speeds for player 16 indicating that it may be beneficial to adopt a higher percentile as a cut-off. The athletes' coach should be asked to comment on these findings as well as on the interpretability of the model's output. For example would it be more useful to have a rolling mean of the estimates rather than the estimates for each day?
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=6}
+player <- "2"
+
+speed_long <- gather(speed_wellness, Player, Wellness, paste0("Player", player))
+
+
+ggplot(filter(performance[performance$Speed_idx > 0,], PlayerID == player), aes(x=Date, y=Speed)) +
+    geom_point(size=2, shape=21, color="blue", fill="lightblue") + 
+    geom_line(data = speed_long, 
+              aes(x=Date, y=Wellness),
+              size=0.75, colour="#F8766D") + 
+    ggtitle(paste0("Predicted vs. Actual 5 Second Average Speed of Player", player)) + 
+    ylab("Maximum 5 Second Average Speed") + 
+    xlab("Date")
+```
+
+We can see that the predicted estimates for player 2 closely align with the fitted values. Again, there are cases where the model significantly overestimates the athlete’s speed suggesting that a higher cut-off value may offer an improvement. Additionally, the model predicts a speed of $15 m/s$ for this athlete sometime in September 2017. This is obviously not possible and thus care should be taken to ensure that if this model is put into use such unrealistic predictions are not commonplace. 
+
+Our findings and thoughts on the use impulse and load models are more or less identical to that for the speed model. As such we offer the same two graphs as above for each of the two additional models primarily for the reader and refrain from commenting to avoid repeating our previous analysis.
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=6}
+## Actual and Predicted Max Load
+players <- c( "Player1", "Player16")
+
+load_long <- gather(load_wellness, Player, Wellness, players)
+
+ggplot(load_long, aes(x=Date, y=Wellness, colour=Player)) + 
+  geom_line(size=0.75) + 
+   ggtitle(("Predicted Max Load of Select Players")) + 
+  ylab(TeX("Load in Arbitaray Units ($AU$)")) + 
+  xlab("Date")
+```
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=6}
+player <- "2"
+
+load_long <- gather(load_wellness, Player, Wellness, paste0("Player", player))
+
+ggplot(filter(performance[performance$Load_idx > 0,], PlayerID == player), aes(x=Date, y=AccelLoad)) +
+    geom_point(size=2, shape=21, color="blue", fill="lightblue") + 
+    geom_line(data = load_long, 
+              aes(x=Date, y=Wellness),
+              size=0.75, colour="#F8766D") + 
+    ggtitle(paste0("Predicted vs. Actual Load in Arbitaray Units for Player", player)) + 
+    ylab(TeX("Maximum Load in Arbitaray Units ($AU$)")) + 
+    xlab("Date")
+```
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=6}
+## Actual and Predicted Maximum Impulse
+players <- c("Player1", "Player16")
+
+impulse_long <- gather(impulse_wellness, Player, Wellness, players)
+
+ggplot(impulse_long, aes(x=Date, y=Wellness, colour=Player)) + 
+  geom_line(size=0.75) + 
+  ggtitle(("Predicted Max Impulse of Select Players")) + 
+  ylab(TeX("Acceleration ($m/s^2$)")) + 
+  xlab("Date")
+```
+
+```{r, echo = FALSE, warning = FALSE, fig.width=12, fig.height=6}
+player <- "2"
+
+impulse_long <- gather(impulse_wellness, Player, Wellness, paste0("Player", player))
+
+
+ggplot(filter(performance[performance$Impulse_idx > 0,], PlayerID == player), aes(x=Date, y=AccelImpulse)) +
+    geom_point(size=2, shape=21, color="blue", fill="lightblue") + 
+    geom_line(data = impulse_long, 
+              aes(x=Date, y=Wellness),
+              size=0.75, colour="#F8766D") + 
+    ggtitle(paste0("Predicted vs. Actual Maximum Impulse of Player", player)) + 
+    ylab("Maximum Impulse") + 
+    xlab("Date")
+```
+
+
+# Conclusion 
+
+We applaud Rugby Canada both for being open to how statistics and data science can help them improve their training and game performance, and for monitoring their athletes' welling being. There are still many areas of high-performance sport that are not concerned with one or both of these aspects of modern sport. When coming up with our measures of training load and wellness we kept these concerns in the front of mind, aiming to create easily interpretable, relevant, and accurate metrics which can be used both in and out of competition. 
+
+Our proposed measure of session load is loosely based on well established models which quantify session load through heart rate. As such, we are confident that it will offer a more accurate measure of training load for Rugby Canada's athletes. Additionally, we believe that our measure somewhat corrects for the issues raised in regarding athletes' ability to account for session duration when reporting rate of perceived exertion. Finally, in the event that heart rate data becomes available, or that individual athletes have access to their own heart rate data, the code used in our measure of session load is immediately reproduceable and can be used to calculate Eric Banister's training impulse score. 
+
+To quantify wellness, we have taken ordinal and binary survey produced easily interpretable numerical scores relating to different physiological aspects of rugby. Additionally, these scores are available daily both in and out of competition and can thus be used to help monitor the health of the athletes throughout the training cycle. Admittedly, our scores are somewhat unpolished at this time, but can be further refined with the help of the training staff.
+
+Unfortunately, due to the lack of session load data leading up to competition we were unable to study the effects of our session load scores and wellness scores on athletic performance. Future work should include such an analysis.
